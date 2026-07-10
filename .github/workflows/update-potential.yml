@@ -1,0 +1,51 @@
+name: Update Fire Potential Data (NWCG 7-Day)
+
+# CADENCE: NWCG Predictive Services publishes the Significant Fire Potential
+# outlook ONCE per day (typically mid-morning MT). Over-fetching doesn't help
+# the operator and it stresses a public government ArcGIS box. So a 3-hour
+# cron is deliberate: cheap coverage of the daily publish window + a couple
+# of retries if NWCG has a bad hour.
+#
+# Public repo → free GHA minutes. Degrades gracefully to schedule-only if
+# self-dispatch is ever rate-limited.
+on:
+  schedule:
+    - cron: '17 */3 * * *'      # 17-past every 3 hours (offset so we don't
+                                # collide with :00 traffic on NWCG)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: update-potential
+      cancel-in-progress: false
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # No pip installs — fetch_potential.py is stdlib-only. Same convention
+      # as firestorm-ngfs-data / firestorm-cameras.
+
+      - name: Fetch NWCG 7-Day Significant Fire Potential
+        run: python fetch_potential.py
+
+      - name: Commit + push if changed
+        run: |
+          git config user.name  'firestorm-bot'
+          git config user.email 'firestorm-bot@users.noreply.github.com'
+          git add data/potential.json
+          if git diff --cached --quiet; then
+            echo 'No change'
+          else
+            git commit -m "potential update $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git pull --rebase --autostash origin main || true
+            git push
+          fi
